@@ -17,7 +17,7 @@ type Client struct {
 	token      string
 	httpClient *http.Client
 
-	retries     int
+	retries      int
 	retryBackoff time.Duration
 }
 

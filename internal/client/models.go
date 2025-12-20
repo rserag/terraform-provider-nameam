@@ -9,11 +9,11 @@ type DomainsResponse struct {
 }
 
 type Domain struct {
-	ID        string      `json:"id"`
-	Domain    string      `json:"domain"`
-	DnsUsed   bool        `json:"dnsUsed"`
+	ID          string       `json:"id"`
+	Domain      string       `json:"domain"`
+	DnsUsed     bool         `json:"dnsUsed"`
 	NameServers []NameServer `json:"nameServers"`
-	Records   []DNSRecord `json:"records"`
+	Records     []DNSRecord  `json:"records"`
 }
 
 type NameServer struct {
