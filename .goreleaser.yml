@@ -1,0 +1,74 @@
+# GoReleaser configuration for terraform-provider-nameam.
+# Produces:
+# - terraform-provider-nameam_<version>_<os>_<arch>.zip
+# - terraform-provider-nameam_<version>_SHA256SUMS
+# - terraform-provider-nameam_<version>_SHA256SUMS.sig (GPG signature)
+#
+# NOTE: This config does not strip binaries by default (no -s -w) to avoid
+# macOS loader issues you already encountered locally.
+
+version: 2
+
+project_name: terraform-provider-nameam
+
+before:
+  hooks:
+    - go mod tidy
+    - go test ./... -count=1
+
+builds:
+  - id: provider
+    main: .
+    binary: terraform-provider-nameam
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .Commit }}
+      - -X main.date={{ .Date }}
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: terraform-provider
+    builds:
+      - provider
+    format: zip
+    name_template: "terraform-provider-nameam_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "terraform-provider-nameam_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+signs:
+  - artifacts: checksum
+    args:
+      - "--batch"
+      - "--pinentry-mode"
+      - "loopback"
+      - "--passphrase"
+      - "{{ .Env.GPG_PASSPHRASE }}"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--detach-sign"
+      - "{{ .ArtifactPath }}"
+
+release:
+  github:
+    owner: rserag
+    name: terraform-provider-nameam
+  draft: false
+  prerelease: false
+  mode: replace
+  name_template: "v{{ .Version }}"
