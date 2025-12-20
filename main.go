@@ -22,7 +22,7 @@ func main() {
 
 	err := providerserver.Serve(
 		context.Background(),
-		provider.New,
+		provider.New(version),
 		providerserver.ServeOpts{
 			Address: "registry.terraform.io/rserag/nameam",
 			Debug:   debug,

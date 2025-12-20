@@ -1,13 +1,22 @@
-package dnsrecord
+package resource_test
 
 import (
 	"fmt"
 	"os"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	tfprotov6 "github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
-	"github.com/rserag/terraform-provider-nameam/internal/provider"
+
+	nameamprovider "github.com/rserag/terraform-provider-nameam/internal/provider"
 )
+
+var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServer, error){
+	// NOTE: In this framework version, NewProtocol6WithError expects a provider instance.
+	// Our provider.New("test") returns a factory, so we call it: ...New("test")()
+	"nameam": providerserver.NewProtocol6WithError(nameamprovider.New("test")()),
+}
 
 func TestAccDNSRecord_basic(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
@@ -35,7 +44,7 @@ resource "nameam_dns_record" "txt" {
 `, token, domain, domain)
 
 	resource.Test(t, resource.TestCase{
-		ProtoV6ProviderFactories: provider.TestAccProviderFactories(t),
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
 				Config: cfg,

@@ -6,8 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
-	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
-	pschema "github.com/hashicorp/terraform-plugin-framework/provider/schema"
+	providerschema "github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
@@ -28,9 +27,15 @@ type ProviderConfig struct {
 	RetryBackoff types.String `tfsdk:"retry_backoff"`
 }
 
-func New() provider.Provider {
-	return &nameamProvider{
-		version: "0.1.0",
+// New returns a new provider instance.
+//
+// IMPORTANT: version should come from main.go (ldflags) when built for releases.
+// For local builds, it will default to "dev".
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &nameamProvider{
+			version: version,
+		}
 	}
 }
 
@@ -40,26 +45,29 @@ func (p *nameamProvider) Metadata(_ context.Context, _ provider.MetadataRequest,
 }
 
 func (p *nameamProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
-	resp.Schema = pschema.Schema{
-		Attributes: map[string]schema.Attribute{
-			"token": schema.StringAttribute{
+	resp.Schema = providerschema.Schema{
+		Attributes: map[string]providerschema.Attribute{
+			"token": providerschema.StringAttribute{
 				Required:  true,
 				Sensitive: true,
+				// Description is optional; keeping it short.
+				Description: "Name.am JWT bearer token.",
 			},
-			"base_url": schema.StringAttribute{
-				Optional: true,
-			},
-			"timeout": schema.StringAttribute{
+			"base_url": providerschema.StringAttribute{
 				Optional:    true,
-				Description: "HTTP client timeout (e.g. 30s).",
+				Description: "Override API base URL (default: https://api.name.am).",
 			},
-			"retries": schema.Int64Attribute{
+			"timeout": providerschema.StringAttribute{
 				Optional:    true,
-				Description: "Retries for transient errors (429/5xx/timeouts).",
+				Description: "HTTP client timeout (e.g. 30s). Default: 30s.",
 			},
-			"retry_backoff": schema.StringAttribute{
+			"retries": providerschema.Int64Attribute{
 				Optional:    true,
-				Description: "Base retry backoff (e.g. 1s). Exponential backoff is applied.",
+				Description: "Retries for transient errors (429/5xx/timeouts). Default: 3.",
+			},
+			"retry_backoff": providerschema.StringAttribute{
+				Optional:    true,
+				Description: "Base retry backoff (e.g. 1s). Exponential backoff is applied. Default: 1s.",
 			},
 		},
 	}
@@ -67,9 +75,17 @@ func (p *nameamProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 
 func (p *nameamProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
 	var cfg ProviderConfig
-	diags := req.Config.Get(ctx, &cfg)
-	resp.Diagnostics.Append(diags...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	// Validate token
+	if cfg.Token.IsNull() || cfg.Token.ValueString() == "" {
+		resp.Diagnostics.AddError(
+			"Missing token",
+			`Provider "nameam" requires a non-empty "token" (JWT bearer token).`,
+		)
 		return
 	}
 
@@ -80,27 +96,39 @@ func (p *nameamProvider) Configure(ctx context.Context, req provider.ConfigureRe
 
 	timeout := 30 * time.Second
 	if !cfg.Timeout.IsNull() && cfg.Timeout.ValueString() != "" {
-		if d, err := time.ParseDuration(cfg.Timeout.ValueString()); err == nil && d > 0 {
-			timeout = d
-		} else if err != nil {
+		d, err := time.ParseDuration(cfg.Timeout.ValueString())
+		if err != nil {
 			resp.Diagnostics.AddError("Invalid timeout", err.Error())
 			return
 		}
+		if d <= 0 {
+			resp.Diagnostics.AddError("Invalid timeout", "timeout must be > 0")
+			return
+		}
+		timeout = d
 	}
 
 	retries := int64(3)
 	if !cfg.Retries.IsNull() {
 		retries = cfg.Retries.ValueInt64()
+		if retries < 0 {
+			resp.Diagnostics.AddError("Invalid retries", "retries must be >= 0")
+			return
+		}
 	}
 
 	backoff := 1 * time.Second
 	if !cfg.RetryBackoff.IsNull() && cfg.RetryBackoff.ValueString() != "" {
-		if d, err := time.ParseDuration(cfg.RetryBackoff.ValueString()); err == nil && d > 0 {
-			backoff = d
-		} else if err != nil {
+		d, err := time.ParseDuration(cfg.RetryBackoff.ValueString())
+		if err != nil {
 			resp.Diagnostics.AddError("Invalid retry_backoff", err.Error())
 			return
 		}
+		if d <= 0 {
+			resp.Diagnostics.AddError("Invalid retry_backoff", "retry_backoff must be > 0")
+			return
+		}
+		backoff = d
 	}
 
 	api, err := client.New(client.Options{
