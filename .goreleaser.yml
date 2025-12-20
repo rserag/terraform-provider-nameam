@@ -39,9 +39,7 @@ builds:
 
 archives:
   - id: terraform-provider
-    builds:
-      - provider
-    format: zip
+    formats: ["zip"]
     name_template: "terraform-provider-nameam_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE
@@ -53,16 +51,20 @@ checksum:
 
 signs:
   - artifacts: checksum
+    cmd: gpg
     args:
       - "--batch"
+      - "--yes"
       - "--pinentry-mode"
       - "loopback"
       - "--passphrase"
       - "{{ .Env.GPG_PASSPHRASE }}"
-      - "--local-user"
+      - "-u"
       - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
       - "--detach-sign"
-      - "{{ .ArtifactPath }}"
+      - "${artifact}"
 
 release:
   github:
