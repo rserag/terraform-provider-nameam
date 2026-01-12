@@ -2,12 +2,13 @@ module github.com/rserag/terraform-provider-nameam
 
 go 1.22.0
 
-toolchain go1.22.1
+toolchain go1.22.5
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.13.0
 	github.com/hashicorp/terraform-plugin-go v0.25.0
 	github.com/hashicorp/terraform-plugin-testing v1.10.0
+	golang.org/x/time v0.5.0
 )
 
 require (

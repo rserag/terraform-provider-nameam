@@ -15,7 +15,8 @@ variable "nameam_token" {
 }
 
 provider "nameam" {
-  token = var.nameam_token
+  token      = var.nameam_token
+  rate_limit = 5  # Optional: Limit to 5 requests per second when creating many records
 }
 
 data "nameam_domains" "this" {}
