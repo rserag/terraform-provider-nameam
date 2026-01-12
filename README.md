@@ -40,7 +40,8 @@ It is designed for correctness, idempotency, and safe DNS management.
 
 ```hcl
 provider "nameam" {
-  token = var.nameam_token
+  token      = var.nameam_token
+  rate_limit = 5  # Limit to 5 requests per second when creating many records
 }
 ```
 
@@ -49,6 +50,7 @@ provider "nameam" {
 | Name  | Type   | Required | Description |
 |------|--------|----------|-------------|
 | token | string | yes | Name.am JWT bearer token |
+| rate_limit | number | no | Maximum API requests per second (default: 10, set to 0 to disable) |
 
 ---
 

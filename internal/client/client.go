@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"golang.org/x/time/rate"
 )
 
 type Client struct {
@@ -19,6 +20,7 @@ type Client struct {
 
 	retries      int
 	retryBackoff time.Duration
+	rateLimiter  *rate.Limiter
 }
 
 type Options struct {
@@ -27,6 +29,7 @@ type Options struct {
 	Timeout      time.Duration
 	Retries      int
 	RetryBackoff time.Duration
+	RateLimit    float64
 }
 
 func New(opts Options) (*Client, error) {
@@ -56,6 +59,15 @@ func New(opts Options) (*Client, error) {
 		backoff = 1 * time.Second
 	}
 
+	// Initialize rate limiter (default: 10 req/s, 0 = disabled)
+	rateLimit := opts.RateLimit
+	if rateLimit <= 0 {
+		// If not set or 0, use default of 10 req/s
+		rateLimit = 10.0
+	}
+	// rate.Limiter uses tokens per second, with burst of 1
+	limiter := rate.NewLimiter(rate.Limit(rateLimit), 1)
+
 	return &Client{
 		baseURL: base,
 		token:   opts.Token,
@@ -64,6 +76,7 @@ func New(opts Options) (*Client, error) {
 		},
 		retries:      retries,
 		retryBackoff: backoff,
+		rateLimiter:  limiter,
 	}, nil
 }
 
@@ -87,6 +100,13 @@ func (c *Client) UpdateDomain(ctx context.Context, domain string, req UpdateDoma
 }
 
 func (c *Client) doJSON(ctx context.Context, method, path string, in any, out any) error {
+	// Apply rate limiting before making the request
+	if c.rateLimiter != nil {
+		if err := c.rateLimiter.Wait(ctx); err != nil {
+			return fmt.Errorf("rate limiter wait: %w", err)
+		}
+	}
+
 	url := c.baseURL + path
 
 	var body io.Reader

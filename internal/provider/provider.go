@@ -25,6 +25,7 @@ type ProviderConfig struct {
 	Timeout      types.String `tfsdk:"timeout"`
 	Retries      types.Int64  `tfsdk:"retries"`
 	RetryBackoff types.String `tfsdk:"retry_backoff"`
+	RateLimit    types.Float64 `tfsdk:"rate_limit"`
 }
 
 // New returns a new provider instance.
@@ -68,6 +69,10 @@ func (p *nameamProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 			"retry_backoff": providerschema.StringAttribute{
 				Optional:    true,
 				Description: "Base retry backoff (e.g. 1s). Exponential backoff is applied. Default: 1s.",
+			},
+			"rate_limit": providerschema.Float64Attribute{
+				Optional:    true,
+				Description: "Maximum number of API requests per second. Default: 10. Set to 0 to disable rate limiting.",
 			},
 		},
 	}
@@ -131,12 +136,22 @@ func (p *nameamProvider) Configure(ctx context.Context, req provider.ConfigureRe
 		backoff = d
 	}
 
+	rateLimit := 10.0 // Default: 10 requests per second
+	if !cfg.RateLimit.IsNull() {
+		rateLimit = cfg.RateLimit.ValueFloat64()
+		if rateLimit < 0 {
+			resp.Diagnostics.AddError("Invalid rate_limit", "rate_limit must be >= 0")
+			return
+		}
+	}
+
 	api, err := client.New(client.Options{
 		BaseURL:      baseURL,
 		Token:        cfg.Token.ValueString(),
 		Timeout:      timeout,
 		Retries:      int(retries),
 		RetryBackoff: backoff,
+		RateLimit:    rateLimit,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Name.am client", err.Error())
