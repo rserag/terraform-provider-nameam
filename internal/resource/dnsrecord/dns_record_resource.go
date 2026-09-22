@@ -2,6 +2,7 @@ package dnsrecord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	rplan "github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	splan "github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 
 	"github.com/rserag/terraform-provider-nameam/internal/client"
@@ -40,25 +42,30 @@ func (r *resourceDNSRecord) Schema(_ context.Context, _ resource.SchemaRequest, 
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"domain": schema.StringAttribute{
-				Required: true,
+				Required:    true,
+				Description: "Lowercase domain name without a trailing dot.",
 				PlanModifiers: []rplan.String{
 					splan.RequiresReplace(),
 				},
+				Validators: []validator.String{canonicalDNSNameValidator{label: "domain"}},
 			},
 			"type": schema.StringAttribute{
-				Required: true,
-				PlanModifiers: []rplan.String{
-					splan.RequiresReplace(), // update is delete+create; treat type change as replace
-				},
+				Required:    true,
+				Description: "Uppercase DNS record type.",
+				Validators:  []validator.String{uppercaseRecordTypeValidator{}},
 			},
 			"name": schema.StringAttribute{
-				Required: true,
+				Required:    true,
+				Description: "Lowercase fully-qualified record name without a trailing dot.",
+				Validators:  []validator.String{canonicalDNSNameValidator{label: "record name"}},
 			},
 			"content": schema.StringAttribute{
-				Required: true,
+				Required:    true,
+				Description: "Record content, passed to Name.am exactly.",
 			},
 			"ttl": schema.Int64Attribute{
-				Required: true,
+				Required:    true,
+				Description: "TTL value. Name.am documents no default, so it is required.",
 			},
 			"record_id": schema.StringAttribute{
 				Computed: true,
@@ -96,9 +103,11 @@ func (r *resourceDNSRecord) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddError("Unable to read domain before create", err.Error())
 		return
 	}
-	if existing := findRecordByFields(dom.Records, plan.Type.ValueString(), name, plan.Content.ValueString(), plan.TTL.ValueInt64()); existing != nil {
-		plan.RecordID = types.StringValue(existing.ID)
-		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+	if existing := findRecordsByFields(domain, dom.Records, plan.Type.ValueString(), name, plan.Content.ValueString(), plan.TTL.ValueInt64()); len(existing) > 0 {
+		resp.Diagnostics.AddError(
+			"DNS record already exists",
+			fmt.Sprintf("A matching record already exists in %s with id %s. Import it explicitly with `terraform import nameam_dns_record.<name> %s/%s`; the provider will not silently take ownership of unmanaged records.", domain, existing[0].ID, domain, existing[0].ID),
+		)
 		return
 	}
 
@@ -119,14 +128,15 @@ func (r *resourceDNSRecord) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	created := findRecordByFields(updated.Records, plan.Type.ValueString(), name, plan.Content.ValueString(), plan.TTL.ValueInt64())
-	if created == nil || created.ID == "" {
+	createdMatches := findRecordsByFields(domain, updated.Records, plan.Type.ValueString(), name, plan.Content.ValueString(), plan.TTL.ValueInt64())
+	if len(createdMatches) != 1 || createdMatches[0].ID == "" {
 		resp.Diagnostics.AddError(
 			"Unable to correlate created record",
-			"Create succeeded but provider could not find created record in response. If duplicates exist, delete them manually and re-apply.",
+			fmt.Sprintf("Create succeeded but provider found %d matching records in the response; exactly one was expected. Inspect the zone before retrying.", len(createdMatches)),
 		)
 		return
 	}
+	created := createdMatches[0]
 
 	plan.Domain = types.StringValue(domain)
 	plan.Name = types.StringValue(name)
@@ -144,15 +154,13 @@ func (r *resourceDNSRecord) Read(ctx context.Context, req resource.ReadRequest, 
 
 	domain := normalizeNoDotLower(state.Domain.ValueString())
 
-	domainsResp, err := r.api.GetDomains(ctx)
-	if err != nil {
-		resp.Diagnostics.AddError("Unable to read domains", err.Error())
+	dom, err := r.api.GetDomain(ctx, domain)
+	if errors.Is(err, client.ErrDomainNotFound) {
+		resp.State.RemoveResource(ctx)
 		return
 	}
-
-	dom := findDomain(domainsResp.Docs, domain)
-	if dom == nil {
-		resp.State.RemoveResource(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to read domains", err.Error())
 		return
 	}
 
@@ -171,7 +179,7 @@ func (r *resourceDNSRecord) Read(ctx context.Context, req resource.ReadRequest, 
 	// refresh state from API canonical values
 	state.Domain = types.StringValue(domain)
 	state.Type = types.StringValue(rec.Type)
-	state.Name = types.StringValue(normalizeNoDotLower(rec.Name))
+	state.Name = types.StringValue(normalizeRecordFQDN(domain, rec.Name))
 	state.Content = types.StringValue(rec.Content)
 	state.TTL = types.Int64Value(rec.TTL)
 	state.RecordID = types.StringValue(rec.ID)
@@ -191,48 +199,46 @@ func (r *resourceDNSRecord) Update(ctx context.Context, req resource.UpdateReque
 	domain := normalizeNoDotLower(plan.Domain.ValueString())
 	newName := normalizeNoDotLower(plan.Name.ValueString())
 
-	// If record_id exists, delete by id then create new desired.
-	oldID := state.RecordID.ValueString()
-	if oldID != "" {
-		_, err := r.api.UpdateDomain(ctx, domain, client.UpdateDomainRequest{
-			Records: []client.UpdateRecord{
-				{ID: oldID, Action: "DELETE"},
-			},
-		})
-		if err != nil {
-			resp.Diagnostics.AddError("Unable to delete DNS record during update", err.Error())
-			return
-		}
-	}
-
 	prefix, err := computePrefix(domain, newName)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid record name for domain", err.Error())
 		return
 	}
 
-	updated, err := r.api.UpdateDomain(ctx, domain, client.UpdateDomainRequest{
-		Records: []client.UpdateRecord{
-			{
-				Type:    plan.Type.ValueString(),
-				TTL:     plan.TTL.ValueInt64(),
-				Prefix:  prefix,
-				Name:    newName,
-				Content: plan.Content.ValueString(),
-				Action:  "CREATE",
-			},
-		},
-	})
+	current, err := r.getDomain(ctx, domain)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to read domain before update", err.Error())
+		return
+	}
+
+	oldID := state.RecordID.ValueString()
+	if oldID == "" || findRecordByID(current.Records, oldID) == nil {
+		resp.Diagnostics.AddError("Managed DNS record is missing", "The record disappeared before update. Refresh Terraform state and apply again.")
+		return
+	}
+	for _, match := range findRecordsByFields(domain, current.Records, plan.Type.ValueString(), newName, plan.Content.ValueString(), plan.TTL.ValueInt64()) {
+		if match.ID != oldID {
+			resp.Diagnostics.AddError(
+				"Updated DNS record would conflict with an unmanaged record",
+				fmt.Sprintf("A matching desired record already exists with id %s. Import or remove that record before updating this resource.", match.ID),
+			)
+			return
+		}
+	}
+
+	updateRequest := replacementRequest(oldID, plan.Type.ValueString(), newName, prefix, plan.Content.ValueString(), plan.TTL.ValueInt64())
+	updated, err := r.api.UpdateDomain(ctx, domain, updateRequest)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create DNS record during update", err.Error())
 		return
 	}
 
-	created := findRecordByFields(updated.Records, plan.Type.ValueString(), newName, plan.Content.ValueString(), plan.TTL.ValueInt64())
-	if created == nil || created.ID == "" {
-		resp.Diagnostics.AddError("Unable to correlate created record during update", "Create returned no match in records list.")
+	createdMatches := findRecordsByFields(domain, updated.Records, plan.Type.ValueString(), newName, plan.Content.ValueString(), plan.TTL.ValueInt64())
+	if len(createdMatches) != 1 || createdMatches[0].ID == "" {
+		resp.Diagnostics.AddError("Unable to correlate created record during update", fmt.Sprintf("Update returned %d matching records; exactly one was expected. Inspect the zone before retrying.", len(createdMatches)))
 		return
 	}
+	created := createdMatches[0]
 
 	plan.Domain = types.StringValue(domain)
 	plan.Name = types.StringValue(newName)
@@ -266,38 +272,30 @@ func (r *resourceDNSRecord) Delete(ctx context.Context, req resource.DeleteReque
 }
 
 func (r *resourceDNSRecord) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	// ID format: domain/record_id
-	parts := strings.Split(req.ID, "/")
-	if len(parts) != 2 {
-		resp.Diagnostics.AddError("Invalid import id", "Expected format: domain/record_id (e.g. agtc.am/c841...)")
+	domain, rid, err := parseImportID(req.ID)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid import id", err.Error())
 		return
 	}
-	domain := normalizeNoDotLower(parts[0])
-	rid := parts[1]
 
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("domain"), domain)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("record_id"), rid)...)
 }
 
-func (r *resourceDNSRecord) getDomain(ctx context.Context, domain string) (*client.Domain, error) {
-	resp, err := r.api.GetDomains(ctx)
-	if err != nil {
-		return nil, err
+func parseImportID(id string) (string, string, error) {
+	parts := strings.Split(id, "/")
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("expected format: domain/record_id (e.g. example.am/c841...)")
 	}
-	d := findDomain(resp.Docs, domain)
-	if d == nil {
-		return nil, fmt.Errorf("domain not found: %s", domain)
+	domain := normalizeNoDotLower(parts[0])
+	if !strings.Contains(domain, ".") {
+		return "", "", fmt.Errorf("import domain %q must be a fully-qualified domain name", parts[0])
 	}
-	return d, nil
+	return domain, strings.TrimSpace(parts[1]), nil
 }
 
-func findDomain(docs []client.Domain, domain string) *client.Domain {
-	for i := range docs {
-		if normalizeNoDotLower(docs[i].Domain) == domain {
-			return &docs[i]
-		}
-	}
-	return nil
+func (r *resourceDNSRecord) getDomain(ctx context.Context, domain string) (*client.Domain, error) {
+	return r.api.GetDomain(ctx, domain)
 }
 
 func findRecordByID(records []client.DNSRecord, id string) *client.DNSRecord {
@@ -309,24 +307,44 @@ func findRecordByID(records []client.DNSRecord, id string) *client.DNSRecord {
 	return nil
 }
 
-func findRecordByFields(records []client.DNSRecord, typ, name, content string, ttl int64) *client.DNSRecord {
+func findRecordsByFields(domain string, records []client.DNSRecord, typ, name, content string, ttl int64) []*client.DNSRecord {
 	typ = strings.TrimSpace(typ)
-	name = normalizeNoDotLower(name)
+	name = normalizeRecordFQDN(domain, name)
+	matches := make([]*client.DNSRecord, 0, 1)
 	for i := range records {
 		if records[i].Type == typ &&
-			normalizeNoDotLower(records[i].Name) == name &&
+			normalizeRecordFQDN(domain, records[i].Name) == name &&
 			records[i].Content == content &&
 			records[i].TTL == ttl {
-			return &records[i]
+			matches = append(matches, &records[i])
 		}
 	}
-	return nil
+	return matches
+}
+
+func replacementRequest(oldID, recordType, name, prefix, content string, ttl int64) client.UpdateDomainRequest {
+	return client.UpdateDomainRequest{Records: []client.UpdateRecord{
+		{ID: oldID, Action: "DELETE"},
+		{Type: recordType, TTL: ttl, Prefix: prefix, Name: name, Content: content, Action: "CREATE"},
+	}}
 }
 
 func normalizeNoDotLower(s string) string {
 	s = strings.TrimSpace(s)
 	s = strings.TrimSuffix(s, ".")
 	return strings.ToLower(s)
+}
+
+func normalizeRecordFQDN(domain, name string) string {
+	domain = normalizeNoDotLower(domain)
+	name = normalizeNoDotLower(name)
+	if name == "" || name == "@" || name == domain {
+		return domain
+	}
+	if strings.HasSuffix(name, "."+domain) {
+		return name
+	}
+	return name + "." + domain
 }
 
 func computePrefix(domain, name string) (string, error) {

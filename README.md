@@ -12,7 +12,7 @@ It is designed for correctness, idempotency, and safe DNS management.
 ## Features (v1)
 
 ### Supported
-- Provider authentication using JWT bearer token
+- Provider authentication using a Name.am API token
 - Data source to list domains
 - Resource to create, update (recreate), delete, and import DNS records
 
@@ -32,23 +32,21 @@ It is designed for correctness, idempotency, and safe DNS management.
 
 - Terraform >= 1.6
 - Go >= 1.22 (for development)
-- Valid Name.am JWT token
+- Valid Name.am API token
 
 ---
 
 ## Provider Configuration
 
 ```hcl
-provider "nameam" {
-  token = var.nameam_token
-}
+provider "nameam" {}
 ```
 
 ### Arguments
 
 | Name  | Type   | Required | Description |
 |------|--------|----------|-------------|
-| token | string | yes | Name.am JWT bearer token |
+| token | string | no | Name.am API token; defaults to `NAMEAM_TOKEN` |
 
 ---
 
@@ -136,14 +134,12 @@ Should show **no changes**.
 
 ## Update Semantics
 
-The Name.am API does not support in-place DNS record updates.
+Terraform updates are sent as one documented mixed mutation batch containing:
 
-Terraform updates are implemented as:
-1. DELETE existing record by ID
-2. CREATE new record
-3. Store new record ID
+1. `DELETE` for the existing record ID
+2. `CREATE` for the desired record
 
-This behavior is intentional and documented.
+The provider reads the zone after an ambiguous transient failure before deciding whether a mutation is safe to retry. It never silently adopts an existing matching record; use explicit import instead.
 
 ---
 
@@ -170,11 +166,9 @@ provider_installation {
 
 ---
 
-## Limitations
+## Pagination
 
-- Domain listing endpoint includes pagination fields, but request-side pagination is not documented.
-- Provider currently fetches all domains in a single request.
-- Pagination support will be added only if officially documented.
+The provider follows the documented `page`, `limit`, `hasNextPage`, and `nextPage` fields until every account domain has been read.
 
 ---
 

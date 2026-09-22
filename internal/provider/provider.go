@@ -2,6 +2,9 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -48,10 +51,9 @@ func (p *nameamProvider) Schema(_ context.Context, _ provider.SchemaRequest, res
 	resp.Schema = providerschema.Schema{
 		Attributes: map[string]providerschema.Attribute{
 			"token": providerschema.StringAttribute{
-				Required:  true,
-				Sensitive: true,
-				// Description is optional; keeping it short.
-				Description: "Name.am JWT bearer token.",
+				Optional:    true,
+				Sensitive:   true,
+				Description: "Name.am API token. Defaults to the NAMEAM_TOKEN environment variable.",
 			},
 			"base_url": providerschema.StringAttribute{
 				Optional:    true,
@@ -80,64 +82,13 @@ func (p *nameamProvider) Configure(ctx context.Context, req provider.ConfigureRe
 		return
 	}
 
-	// Validate token
-	if cfg.Token.IsNull() || cfg.Token.ValueString() == "" {
-		resp.Diagnostics.AddError(
-			"Missing token",
-			`Provider "nameam" requires a non-empty "token" (JWT bearer token).`,
-		)
+	opts, err := providerClientOptions(cfg, os.Getenv)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid provider configuration", err.Error())
 		return
 	}
 
-	baseURL := "https://api.name.am"
-	if !cfg.BaseURL.IsNull() && cfg.BaseURL.ValueString() != "" {
-		baseURL = cfg.BaseURL.ValueString()
-	}
-
-	timeout := 30 * time.Second
-	if !cfg.Timeout.IsNull() && cfg.Timeout.ValueString() != "" {
-		d, err := time.ParseDuration(cfg.Timeout.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid timeout", err.Error())
-			return
-		}
-		if d <= 0 {
-			resp.Diagnostics.AddError("Invalid timeout", "timeout must be > 0")
-			return
-		}
-		timeout = d
-	}
-
-	retries := int64(3)
-	if !cfg.Retries.IsNull() {
-		retries = cfg.Retries.ValueInt64()
-		if retries < 0 {
-			resp.Diagnostics.AddError("Invalid retries", "retries must be >= 0")
-			return
-		}
-	}
-
-	backoff := 1 * time.Second
-	if !cfg.RetryBackoff.IsNull() && cfg.RetryBackoff.ValueString() != "" {
-		d, err := time.ParseDuration(cfg.RetryBackoff.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid retry_backoff", err.Error())
-			return
-		}
-		if d <= 0 {
-			resp.Diagnostics.AddError("Invalid retry_backoff", "retry_backoff must be > 0")
-			return
-		}
-		backoff = d
-	}
-
-	api, err := client.New(client.Options{
-		BaseURL:      baseURL,
-		Token:        cfg.Token.ValueString(),
-		Timeout:      timeout,
-		Retries:      int(retries),
-		RetryBackoff: backoff,
-	})
+	api, err := client.New(opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Unable to create Name.am client", err.Error())
 		return
@@ -145,6 +96,60 @@ func (p *nameamProvider) Configure(ctx context.Context, req provider.ConfigureRe
 
 	resp.DataSourceData = api
 	resp.ResourceData = api
+}
+
+func providerClientOptions(cfg ProviderConfig, getenv func(string) string) (client.Options, error) {
+	token := strings.TrimSpace(getenv("NAMEAM_TOKEN"))
+	if !cfg.Token.IsNull() && !cfg.Token.IsUnknown() {
+		token = strings.TrimSpace(cfg.Token.ValueString())
+	}
+	if token == "" {
+		return client.Options{}, fmt.Errorf(`provider "nameam" requires a non-empty API token in "token" or NAMEAM_TOKEN`)
+	}
+
+	baseURL := "https://api.name.am"
+	if !cfg.BaseURL.IsNull() && !cfg.BaseURL.IsUnknown() && strings.TrimSpace(cfg.BaseURL.ValueString()) != "" {
+		baseURL = strings.TrimSpace(cfg.BaseURL.ValueString())
+	}
+
+	timeout, err := configuredDuration(cfg.Timeout, 30*time.Second, "timeout")
+	if err != nil {
+		return client.Options{}, err
+	}
+	backoff, err := configuredDuration(cfg.RetryBackoff, time.Second, "retry_backoff")
+	if err != nil {
+		return client.Options{}, err
+	}
+
+	retries := int64(3)
+	if !cfg.Retries.IsNull() && !cfg.Retries.IsUnknown() {
+		retries = cfg.Retries.ValueInt64()
+		if retries < 0 {
+			return client.Options{}, fmt.Errorf("retries must be >= 0")
+		}
+	}
+
+	return client.Options{
+		BaseURL:      baseURL,
+		Token:        token,
+		Timeout:      timeout,
+		Retries:      int(retries),
+		RetryBackoff: backoff,
+	}, nil
+}
+
+func configuredDuration(value types.String, fallback time.Duration, name string) (time.Duration, error) {
+	if value.IsNull() || value.IsUnknown() || strings.TrimSpace(value.ValueString()) == "" {
+		return fallback, nil
+	}
+	duration, err := time.ParseDuration(strings.TrimSpace(value.ValueString()))
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", name, err)
+	}
+	if duration <= 0 {
+		return 0, fmt.Errorf("%s must be > 0", name)
+	}
+	return duration, nil
 }
 
 func (p *nameamProvider) Resources(_ context.Context) []func() resource.Resource {

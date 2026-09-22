@@ -67,8 +67,15 @@ func (d *dataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *d
 		return
 	}
 
-	out := domainsModel{Domains: make([]domainModel, 0, len(r.Docs))}
-	for _, dom := range r.Docs {
+	out := domainsToModel(r.Docs)
+
+	diags := resp.State.Set(ctx, &out)
+	resp.Diagnostics.Append(diags...)
+}
+
+func domainsToModel(domains []client.Domain) domainsModel {
+	out := domainsModel{Domains: make([]domainModel, 0, len(domains))}
+	for _, dom := range domains {
 		ns := make([]types.String, 0, len(dom.NameServers))
 		for _, n := range dom.NameServers {
 			if strings.TrimSpace(n.Hostname) == "" {
@@ -82,7 +89,5 @@ func (d *dataSource) Read(ctx context.Context, _ datasource.ReadRequest, resp *d
 			NameServers: ns,
 		})
 	}
-
-	diags := resp.State.Set(ctx, &out)
-	resp.Diagnostics.Append(diags...)
+	return out
 }

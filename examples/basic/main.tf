@@ -4,19 +4,13 @@ terraform {
   required_providers {
     nameam = {
       source  = "rserag/nameam"
-      version = "0.1.0"
+      version = "~> 0.1"
     }
   }
 }
 
-variable "nameam_token" {
-  type      = string
-  sensitive = true
-}
-
-provider "nameam" {
-  token = var.nameam_token
-}
+# Reads the API token from NAMEAM_TOKEN.
+provider "nameam" {}
 
 data "nameam_domains" "this" {}
 
