@@ -24,4 +24,4 @@ List of domain names.
 
 ## Notes
 
-The API response includes additional metadata for each domain. This data source exposes only fields required for DNS workflows.
+The API response includes additional metadata for each domain. This data source exposes only fields required for DNS workflows and follows every documented pagination page.

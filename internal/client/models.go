@@ -1,15 +1,19 @@
 package client
 
 type DomainsResponse struct {
-	Docs  []Domain `json:"docs"`
-	Total int      `json:"total"`
-	Limit int      `json:"limit"`
-	Page  int      `json:"page"`
-	Pages int      `json:"pages"`
+	Docs        []Domain `json:"docs"`
+	TotalDocs   int      `json:"totalDocs"`
+	Limit       int      `json:"limit"`
+	Page        int      `json:"page"`
+	TotalPages  int      `json:"totalPages"`
+	HasPrevPage bool     `json:"hasPrevPage"`
+	HasNextPage bool     `json:"hasNextPage"`
+	PrevPage    *int     `json:"prevPage"`
+	NextPage    *int     `json:"nextPage"`
 }
 
 type Domain struct {
-	ID          string       `json:"id"`
+	ID          string       `json:"_id"`
 	Domain      string       `json:"domain"`
 	DnsUsed     bool         `json:"dnsUsed"`
 	NameServers []NameServer `json:"nameServers"`
@@ -23,6 +27,7 @@ type NameServer struct {
 type DNSRecord struct {
 	ID      string `json:"id"`
 	Access  bool   `json:"access"`
+	Proxied bool   `json:"proxied"`
 	Type    string `json:"type"`
 	TTL     int64  `json:"ttl"`
 	Name    string `json:"name"`
@@ -44,6 +49,6 @@ type UpdateRecord struct {
 	// For DELETE
 	ID string `json:"id,omitempty"`
 
-	// CREATE | DELETE
+	// CREATE | UPDATE | DELETE
 	Action string `json:"action"`
 }

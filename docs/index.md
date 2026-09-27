@@ -9,18 +9,17 @@ This provider manages DNS records for domains in Name.am via the Name.am REST AP
 
 ## Authentication
 
-The provider authenticates using a JWT bearer token.
+The provider authenticates using a Name.am API token. Set `NAMEAM_TOKEN` in the environment or configure the sensitive `token` argument.
 
 ```hcl
-provider "nameam" {
-  token = var.nameam_token
-}
+provider "nameam" {}
 ```
 
 ## Configuration Reference
 
-`token` (Required)  
-JWT bearer token for Name.am API.
+`token` (Optional)
+
+Name.am API token. Defaults to the `NAMEAM_TOKEN` environment variable.
 
 `base_url` (Optional)  
 Override the API base URL. Default is `https://api.name.am`.
@@ -29,11 +28,13 @@ Override the API base URL. Default is `https://api.name.am`.
 HTTP client timeout as a Go duration string (for example `30s`). Default is `30s`.
 
 `retries` (Optional)  
-Number of retries for transient errors (429/5xx/timeouts). Default is `3`.
+Number of retries for transient errors (429/5xx/timeouts). Default is `3`; set to `0` to disable retries. DNS mutations are reconciled with a read before any retry.
 
 `retry_backoff` (Optional)  
 Base retry backoff as a Go duration string (for example `1s`). Exponential backoff is applied. Default is `1s`.
 
-## Known Limitations
+## DNS ownership
 
-The Name.am API surface used by this provider currently relies on the domain listing endpoint to read DNS records. Pagination is not implemented yet (TODO in code), consistent with available documentation and current implementation scope.
+Creating a resource fails if an identical record already exists. Import the existing record explicitly to transfer ownership to Terraform. Updates are sent as one mixed `DELETE`/`CREATE` batch, and ambiguous transient failures are reconciled before retry.
+
+The provider relies on the domain listing endpoint to read DNS records and follows all documented pagination pages.

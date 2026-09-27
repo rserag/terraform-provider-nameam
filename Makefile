@@ -3,6 +3,10 @@ SHELL := /bin/bash
 PROVIDER_NAME := nameam
 PKG := github.com/rserag/terraform-provider-nameam
 BIN := terraform-provider-$(PROVIDER_NAME)
+VERSION ?= 0.1.1
+GOOS := $(shell go env GOOS)
+GOARCH := $(shell go env GOARCH)
+PLUGIN_DIR := $(HOME)/.terraform.d/plugins/registry.terraform.io/rserag/$(PROVIDER_NAME)/$(VERSION)/$(GOOS)_$(GOARCH)
 
 .PHONY: all fmt vet test build install lint tidy
 
@@ -22,8 +26,8 @@ build:
 	go build -o bin/$(BIN) .
 
 install: build
-	mkdir -p ~/.terraform.d/plugins/registry.terraform.io/rserag/$(PROVIDER_NAME)/0.1.0/darwin_amd64
-	cp bin/$(BIN) ~/.terraform.d/plugins/registry.terraform.io/rserag/$(PROVIDER_NAME)/0.1.0/darwin_amd64/$(BIN)
+	mkdir -p $(PLUGIN_DIR)
+	cp bin/$(BIN) $(PLUGIN_DIR)/$(BIN)
 
 tidy:
 	go mod tidy
